@@ -1,0 +1,211 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, ai-hub-integration ]
+  pull_request:
+    branches: [ main, develop, ai-hub-integration ]
+
+jobs:
+  test-frontend:
+    runs-on: ubuntu-latest
+    name: Frontend Tests
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install frontend dependencies
+      run: npm ci
+    
+    - name: Run frontend linting
+      run: npm run lint
+    
+    - name: Run frontend tests
+      run: npm run test -- --coverage --watchAll=false
+    
+    - name: Build frontend
+      run: npm run build
+    
+    - name: Upload frontend build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: frontend-build
+        path: dist/
+
+  test-backend:
+    runs-on: ubuntu-latest
+    name: Backend Tests
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: server/package-lock.json
+    
+    - name: Install backend dependencies
+      run: |
+        cd server
+        npm ci
+    
+    - name: Run backend tests
+      run: |
+        cd server
+        npm run test
+      env:
+        NODE_ENV: test
+    
+    - name: Run backend linting
+      run: |
+        cd server
+        npm run lint
+
+  integration-tests:
+    runs-on: ubuntu-latest
+    name: Integration Tests
+    needs: [test-frontend, test-backend]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install all dependencies
+      run: |
+        npm ci
+        cd server && npm ci
+    
+    - name: Start backend server
+      run: |
+        cd server
+        npm start &
+        sleep 10
+      env:
+        NODE_ENV: test
+        PORT: 3001
+    
+    - name: Run integration tests
+      run: npm run test:integration
+      env:
+        REACT_APP_API_URL: http://localhost:3001
+
+  security-scan:
+    runs-on: ubuntu-latest
+    name: Security Scan
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: |
+        npm ci
+        cd server && npm ci
+    
+    - name: Run security audit
+      run: |
+        npm audit --audit-level high
+        cd server && npm audit --audit-level high
+    
+    - name: Run dependency check
+      run: |
+        npx audit-ci --config audit-ci.json
+
+  ai-agent-tests:
+    runs-on: ubuntu-latest
+    name: AI Agent Integration Tests
+    if: contains(github.ref, 'agent/') || contains(github.event.pull_request.head.ref, 'agent/')
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies
+      run: |
+        npm ci
+        cd server && npm ci
+    
+    - name: Test AI agent integrations
+      run: npm run test:agents
+      env:
+        NODE_ENV: test
+        # Note: Real API tokens should be added as GitHub secrets
+        REPLIT_API_TOKEN: ${{ secrets.REPLIT_API_TOKEN }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    name: Deploy to Staging
+    needs: [test-frontend, test-backend, integration-tests, security-scan]
+    if: github.ref == 'refs/heads/develop'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies and build
+      run: |
+        npm ci
+        cd server && npm ci && cd ..
+        npm run build
+    
+    - name: Deploy to staging
+      run: echo "Deploy to staging environment"
+      # Add your staging deployment commands here
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    name: Deploy to Production
+    needs: [test-frontend, test-backend, integration-tests, security-scan]
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+        cache: 'npm'
+    
+    - name: Install dependencies and build
+      run: |
+        npm ci
+        cd server && npm ci && cd ..
+        npm run build
+    
+    - name: Run production tests
+      run: npm run test:production
+    
+    - name: Deploy to production
+      run: echo "Deploy to production environment"
+      # Add your production deployment commands here
